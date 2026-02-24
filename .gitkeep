@@ -1,0 +1,372 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/Makefile b/Makefile
+new file mode 100644
+index 0000000000000000000000000000000000000000..3c6c9f0ebfb14575c125a5630200314cfee57594
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,10 @@
++SIM_OUT=simv
++
++.PHONY: test clean
++
++test:
++	iverilog -g2012 -o $(SIM_OUT) src/mac.v src/matmul_accel.v tb/matmul_accel_tb.v
++	vvp $(SIM_OUT)
++
++clean:
++	rm -f $(SIM_OUT)
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..e587db4e86880f9f214ad3e147809a913f5c69e4
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,54 @@
++# AI 加速器 Verilog 專案（2x2 Matrix Multiply Accelerator）
++
++這個專案是一個 **AI 加速器入門骨架**，主題是神經網路中最核心的運算：
++
++- **MAC（Multiply-Accumulate）**
++- **矩陣乘法（GEMM 的最小版本）**
++
++目前提供一個可合成的 2x2 矩陣乘法加速器，未來可擴展為更大的 systolic array / NPU。
++
++## 專案結構
++
++- `src/mac.v`：可重用的 signed MAC 單元
++- `src/matmul_accel.v`：2x2 矩陣乘法加速器（時序版，`start/busy/done`）
++- `tb/matmul_accel_tb.v`：自檢式 testbench
++- `Makefile`：`make test` / `make clean`
++
++## 模組功能
++
++### `matmul_accel`
++
++輸入：
++- `clk`, `rst_n`
++- `start`：拉高一拍啟動運算
++- `a_mat`：4 個 int8，row-major 打包（`[31:0]`）
++- `b_mat`：4 個 int8，row-major 打包（`[31:0]`）
++
++輸出：
++- `busy`：運算中
++- `done`：完成脈衝（1 cycle）
++- `c_mat`：4 個 int32，row-major 打包（`[127:0]`）
++
++計算內容：
++
++\[
++C = A \times B
++\]
++
++其中 `A`,`B`,`C` 都是 2x2 矩陣。
++
++## 執行測試
++
++```bash
++make test
++```
++
++> 若本機沒有 `iverilog`，請先安裝 Icarus Verilog。
++
++## 下一步擴展方向
++
++1. 將 2x2 推廣成參數化 NxN
++2. 改成串流介面（valid/ready）
++3. 加上 on-chip SRAM buffer（A/B/C tile）
++4. 做成 systolic array + weight stationary / output stationary 資料流
++5. 增加量化支援（int8 / int4）與飽和邏輯
+diff --git a/src/alu.v b/src/alu.v
+new file mode 100644
+index 0000000000000000000000000000000000000000..9f35da02282c0c0edf5df162578680ed9fc8866f
+--- /dev/null
++++ b/src/alu.v
+@@ -0,0 +1,25 @@
++module alu (
++    input  wire [7:0] a,
++    input  wire [7:0] b,
++    input  wire [2:0] op,
++    output reg  [7:0] y,
++    output wire       zero
++);
++
++always @(*) begin
++    case (op)
++        3'b000: y = a + b;
++        3'b001: y = a - b;
++        3'b010: y = a & b;
++        3'b011: y = a | b;
++        3'b100: y = a ^ b;
++        3'b101: y = a << b[2:0];
++        3'b110: y = a >> b[2:0];
++        3'b111: y = ($signed(a) < $signed(b)) ? 8'd1 : 8'd0;
++        default: y = 8'd0;
++    endcase
++end
++
++assign zero = (y == 8'd0);
++
++endmodule
+diff --git a/src/mac.v b/src/mac.v
+new file mode 100644
+index 0000000000000000000000000000000000000000..6e8e0bd9a37ef3649ef3b6fa23e2ab63266e3bf5
+--- /dev/null
++++ b/src/mac.v
+@@ -0,0 +1,13 @@
++module mac #(
++    parameter IN_W  = 8,
++    parameter ACC_W = 32
++) (
++    input  wire signed [IN_W-1:0]  a,
++    input  wire signed [IN_W-1:0]  b,
++    input  wire signed [ACC_W-1:0] acc_in,
++    output wire signed [ACC_W-1:0] acc_out
++);
++
++assign acc_out = acc_in + (a * b);
++
++endmodule
+diff --git a/src/matmul_accel.v b/src/matmul_accel.v
+new file mode 100644
+index 0000000000000000000000000000000000000000..d93b486009720f22212680b31965707a2d86fa6f
+--- /dev/null
++++ b/src/matmul_accel.v
+@@ -0,0 +1,95 @@
++module matmul_accel (
++    input  wire         clk,
++    input  wire         rst_n,
++    input  wire         start,
++    input  wire [31:0]  a_mat,
++    input  wire [31:0]  b_mat,
++    output reg          busy,
++    output reg          done,
++    output reg  [127:0] c_mat
++);
++
++reg [1:0] i;
++reg [1:0] j;
++reg [1:0] k;
++reg signed [31:0] acc;
++
++wire signed [7:0] a_elem;
++wire signed [7:0] b_elem;
++wire signed [31:0] acc_next;
++
++mac #(
++    .IN_W(8),
++    .ACC_W(32)
++) u_mac (
++    .a(a_elem),
++    .b(b_elem),
++    .acc_in(acc),
++    .acc_out(acc_next)
++);
++
++function [7:0] get_a;
++    input [1:0] row;
++    input [1:0] col;
++    begin
++        get_a = a_mat[((row*2 + col)*8) +: 8];
++    end
++endfunction
++
++function [7:0] get_b;
++    input [1:0] row;
++    input [1:0] col;
++    begin
++        get_b = b_mat[((row*2 + col)*8) +: 8];
++    end
++endfunction
++
++assign a_elem = get_a(i, k);
++assign b_elem = get_b(k, j);
++
++always @(posedge clk or negedge rst_n) begin
++    if (!rst_n) begin
++        i     <= 2'd0;
++        j     <= 2'd0;
++        k     <= 2'd0;
++        acc   <= 32'sd0;
++        busy  <= 1'b0;
++        done  <= 1'b0;
++        c_mat <= 128'd0;
++    end else begin
++        done <= 1'b0;
++
++        if (start && !busy) begin
++            i    <= 2'd0;
++            j    <= 2'd0;
++            k    <= 2'd0;
++            acc  <= 32'sd0;
++            busy <= 1'b1;
++        end else if (busy) begin
++            acc <= acc_next;
++
++            if (k == 2'd1) begin
++                c_mat[((i*2 + j)*32) +: 32] <= acc_next;
++                k <= 2'd0;
++                acc <= 32'sd0;
++
++                if (j == 2'd1) begin
++                    j <= 2'd0;
++                    if (i == 2'd1) begin
++                        i    <= 2'd0;
++                        busy <= 1'b0;
++                        done <= 1'b1;
++                    end else begin
++                        i <= i + 2'd1;
++                    end
++                end else begin
++                    j <= j + 2'd1;
++                end
++            end else begin
++                k <= k + 2'd1;
++            end
++        end
++    end
++end
++
++endmodule
+diff --git a/tb/alu_tb.v b/tb/alu_tb.v
+new file mode 100644
+index 0000000000000000000000000000000000000000..6404a462252196e4c97ee4267ee5a4922cc8a7e5
+--- /dev/null
++++ b/tb/alu_tb.v
+@@ -0,0 +1,52 @@
++`timescale 1ns/1ps
++
++module alu_tb;
++    reg  [7:0] a;
++    reg  [7:0] b;
++    reg  [2:0] op;
++    wire [7:0] y;
++    wire       zero;
++
++    alu dut (
++        .a(a),
++        .b(b),
++        .op(op),
++        .y(y),
++        .zero(zero)
++    );
++
++    task expect;
++        input [7:0] exp_y;
++        input       exp_zero;
++        begin
++            #1;
++            if (y !== exp_y || zero !== exp_zero) begin
++                $display("[FAIL] op=%b a=%0d b=%0d y=%0d zero=%b (expect y=%0d zero=%b)",
++                         op, a, b, y, zero, exp_y, exp_zero);
++                $finish;
++            end
++        end
++    endtask
++
++    initial begin
++        // ADD
++        a = 8'd5;  b = 8'd3;  op = 3'b000; expect(8'd8, 1'b0);
++        // SUB
++        a = 8'd5;  b = 8'd5;  op = 3'b001; expect(8'd0, 1'b1);
++        // AND
++        a = 8'hF0; b = 8'h0F; op = 3'b010; expect(8'h00, 1'b1);
++        // OR
++        a = 8'hF0; b = 8'h0F; op = 3'b011; expect(8'hFF, 1'b0);
++        // XOR
++        a = 8'hAA; b = 8'hFF; op = 3'b100; expect(8'h55, 1'b0);
++        // SLL
++        a = 8'd3;  b = 8'd2;  op = 3'b101; expect(8'd12, 1'b0);
++        // SRL
++        a = 8'd16; b = 8'd3;  op = 3'b110; expect(8'd2, 1'b0);
++        // SLT signed: -1 < 1 -> 1
++        a = 8'hFF; b = 8'h01; op = 3'b111; expect(8'd1, 1'b0);
++
++        $display("[PASS] All ALU tests passed.");
++        $finish;
++    end
++endmodule
+diff --git a/tb/matmul_accel_tb.v b/tb/matmul_accel_tb.v
+new file mode 100644
+index 0000000000000000000000000000000000000000..93ca61217b1eee26c9d080ac1186f8971722b144
+--- /dev/null
++++ b/tb/matmul_accel_tb.v
+@@ -0,0 +1,77 @@
++`timescale 1ns/1ps
++
++module matmul_accel_tb;
++    reg         clk;
++    reg         rst_n;
++    reg         start;
++    reg  [31:0] a_mat;
++    reg  [31:0] b_mat;
++    wire        busy;
++    wire        done;
++    wire [127:0] c_mat;
++
++    matmul_accel dut (
++        .clk(clk),
++        .rst_n(rst_n),
++        .start(start),
++        .a_mat(a_mat),
++        .b_mat(b_mat),
++        .busy(busy),
++        .done(done),
++        .c_mat(c_mat)
++    );
++
++    always #5 clk = ~clk;
++
++    task expect_c;
++        input [31:0] c00;
++        input [31:0] c01;
++        input [31:0] c10;
++        input [31:0] c11;
++        begin
++            if (c_mat[31:0] !== c00 || c_mat[63:32] !== c01 ||
++                c_mat[95:64] !== c10 || c_mat[127:96] !== c11) begin
++                $display("[FAIL] C mismatch: got {%0d,%0d,%0d,%0d}, expect {%0d,%0d,%0d,%0d}",
++                    c_mat[31:0], c_mat[63:32], c_mat[95:64], c_mat[127:96],
++                    c00, c01, c10, c11);
++                $finish;
++            end
++        end
++    endtask
++
++    initial begin
++        clk   = 0;
++        rst_n = 0;
++        start = 0;
++        a_mat = 32'd0;
++        b_mat = 32'd0;
++
++        #20;
++        rst_n = 1;
++
++        // A = [ [1,2], [3,4] ]
++        // B = [ [5,6], [7,8] ]
++        // C = A*B = [ [19,22], [43,50] ]
++        a_mat[7:0]   = 8'sd1;  // a00
++        a_mat[15:8]  = 8'sd2;  // a01
++        a_mat[23:16] = 8'sd3;  // a10
++        a_mat[31:24] = 8'sd4;  // a11
++
++        b_mat[7:0]   = 8'sd5;  // b00
++        b_mat[15:8]  = 8'sd6;  // b01
++        b_mat[23:16] = 8'sd7;  // b10
++        b_mat[31:24] = 8'sd8;  // b11
++
++        @(posedge clk);
++        start <= 1'b1;
++        @(posedge clk);
++        start <= 1'b0;
++
++        wait(done == 1'b1);
++        #1;
++
++        expect_c(32'd19, 32'd22, 32'd43, 32'd50);
++        $display("[PASS] matmul_accel test passed.");
++        $finish;
++    end
++endmodule
+ 
+EOF
+)
