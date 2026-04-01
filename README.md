@@ -1,54 +1,47 @@
-# AI 加速器 Verilog 專案（2x2 Matrix Multiply Accelerator）
+# AI 加速器 Verilog 專案（含 5-stage CPU 範例）
 
-這個專案是一個 **AI 加速器入門骨架**，主題是神經網路中最核心的運算：
+這個專案目前包含兩個方向：
 
-- **MAC（Multiply-Accumulate）**
-- **矩陣乘法（GEMM 的最小版本）**
+- AI 加速器練習（原始目標）
+- **5-stage pipeline CPU 教學範例（新增）**
 
-目前提供一個可合成的 2x2 矩陣乘法加速器，未來可擴展為更大的 systolic array / NPU。
+> 目前 repo 內的 AI accelerator 檔案結構仍在整理中；本次新增重點是可跑的 5-stage CPU。
 
-## 專案結構
+## 新增：5-stage CPU
 
-- `src/mac.v`：可重用的 signed MAC 單元
-- `src/matmul_accel.v`：2x2 矩陣乘法加速器（時序版，`start/busy/done`）
-- `tb/matmul_accel_tb.v`：自檢式 testbench
-- `Makefile`：`make test` / `make clean`
+新增檔案：
 
-## 模組功能
+- `cpu5.v`：簡化版 5-stage CPU（IF / ID / EX / MEM / WB）
+- `cpu5_tb.v`：testbench，驗證基本運算、load/store、branch
 
-### `matmul_accel`
+### CPU 支援指令（簡化 MIPS-like）
 
-輸入：
-- `clk`, `rst_n`
-- `start`：拉高一拍啟動運算
-- `a_mat`：4 個 int8，row-major 打包（`[31:0]`）
-- `b_mat`：4 個 int8，row-major 打包（`[31:0]`）
+- R-type: `add`, `sub`, `and`, `or`, `xor`
+- I-type: `addi`, `lw`, `sw`, `beq`
+- J-type: `j`
+- `nop`（`32'h00000000`）
 
-輸出：
-- `busy`：運算中
-- `done`：完成脈衝（1 cycle）
-- `c_mat`：4 個 int32，row-major 打包（`[127:0]`）
+### 目前實作特性
 
-計算內容：
+- 5 階段管線：IF, ID, EX, MEM, WB
+- 內建 instruction/data memory（`imem`, `dmem`）
+- 基本 branch/jump 控制流程
+- 無 forwarding / hazard detection（測試程式用 `nop` 避免資料冒險）
 
-\[
-C = A \times B
-\]
+## 執行 CPU 測試
 
-其中 `A`,`B`,`C` 都是 2x2 矩陣。
+```bash
+make test-cpu
+```
 
-## 執行測試
+預期輸出會包含：
+
+- `PASS: 5-stage CPU basic flow works.`
+
+## 原本 AI accelerator 測試
 
 ```bash
 make test
 ```
 
-> 若本機沒有 `iverilog`，請先安裝 Icarus Verilog。
-
-## 下一步擴展方向
-
-1. 將 2x2 推廣成參數化 NxN
-2. 改成串流介面（valid/ready）
-3. 加上 on-chip SRAM buffer（A/B/C tile）
-4. 做成 systolic array + weight stationary / output stationary 資料流
-5. 增加量化支援（int8 / int4）與飽和邏輯
+> 注意：如果 `src/mac.v` / `src/matmul_accel.v` / `tb/matmul_accel_tb.v` 尚未存在，`make test` 會失敗。
