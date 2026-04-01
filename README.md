@@ -1,47 +1,67 @@
-# AI 加速器 Verilog 專案（含 5-stage CPU 範例）
+# AI Accelerator + Digital Design Playground
 
-這個專案目前包含兩個方向：
+你可以把這個 repo 當成「AI 加速器 + CPU/數位系統」練習場。
 
-- AI 加速器練習（原始目標）
-- **5-stage pipeline CPU 教學範例（新增）**
+## 目前內容
 
-> 目前 repo 內的 AI accelerator 檔案結構仍在整理中；本次新增重點是可跑的 5-stage CPU。
+1. **基礎 ALU 範例**
+   - `alu.v`
 
-## 新增：5-stage CPU
+2. **小型 5-stage CPU（教學版）**
+   - `cpu5.v`
+   - `cpu5_tb.v`
 
-新增檔案：
+3. **較大型 5-stage CPU 系統（新增）**
+   - `rtl/cpu5_system.v`
+   - `rtl/control_unit.v`
+   - `rtl/alu32.v`
+   - `rtl/regfile32.v`
+   - `rtl/forward_unit.v`
+   - `rtl/hazard_unit.v`
+   - `tb/cpu5_system_tb.v`
 
-- `cpu5.v`：簡化版 5-stage CPU（IF / ID / EX / MEM / WB）
-- `cpu5_tb.v`：testbench，驗證基本運算、load/store、branch
+---
 
-### CPU 支援指令（簡化 MIPS-like）
+## 較大型 CPU 系統特色
 
-- R-type: `add`, `sub`, `and`, `or`, `xor`
-- I-type: `addi`, `lw`, `sw`, `beq`
-- J-type: `j`
-- `nop`（`32'h00000000`）
+這版相對前一版更接近可擴展的專案架構：
 
-### 目前實作特性
+- 模組化拆分（control / ALU / regfile / hazard / forwarding / top）
+- 5-stage pipeline（IF/ID/EX/MEM/WB）
+- 支援 forwarding（EX/MEM 與 MEM/WB）
+- 支援 load-use hazard stall（自動插入 bubble）
+- 支援 branch (`beq`, `bne`) 與 `j`
+- 支援指令：
+  - R-type: `add/sub/and/or/xor/slt`
+  - I-type: `addi/andi/ori/lw/sw/beq/bne`
+  - J-type: `j`
 
-- 5 階段管線：IF, ID, EX, MEM, WB
-- 內建 instruction/data memory（`imem`, `dmem`）
-- 基本 branch/jump 控制流程
-- 無 forwarding / hazard detection（測試程式用 `nop` 避免資料冒險）
+> 目前仍是教學型 CPU：內建 `imem/dmem`，沒有 cache、例外中斷、MMU。
 
-## 執行 CPU 測試
+---
+
+## 如何測試
+
+### 較大型 CPU 系統（推薦）
+
+```bash
+make test-cpu-large
+```
+
+預期 testbench 會印出：
+
+- `PASS: larger 5-stage CPU system works with forwarding + load-use stall.`
+
+### 小型 CPU 教學版
 
 ```bash
 make test-cpu
 ```
 
-預期輸出會包含：
-
-- `PASS: 5-stage CPU basic flow works.`
-
-## 原本 AI accelerator 測試
+### 原本 accelerator 測試
 
 ```bash
 make test
 ```
 
-> 注意：如果 `src/mac.v` / `src/matmul_accel.v` / `tb/matmul_accel_tb.v` 尚未存在，`make test` 會失敗。
+> 如果環境沒有 `iverilog`，上述測試會無法執行。
