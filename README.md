@@ -1,54 +1,94 @@
-# AI 加速器 Verilog 專案（2x2 Matrix Multiply Accelerator）
+# AI Accelerator + Digital Design Playground
 
-這個專案是一個 **AI 加速器入門骨架**，主題是神經網路中最核心的運算：
+你可以把這個 repo 當成「AI 加速器 + CPU/數位系統」練習場。
 
-- **MAC（Multiply-Accumulate）**
-- **矩陣乘法（GEMM 的最小版本）**
+## 目前內容
 
-目前提供一個可合成的 2x2 矩陣乘法加速器，未來可擴展為更大的 systolic array / NPU。
+1. **基礎 ALU 範例**
+   - `alu.v`
 
-## 專案結構
+2. **小型 5-stage CPU（教學版）**
+   - `cpu5.v`
+   - `cpu5_tb.v`
 
-- `src/mac.v`：可重用的 signed MAC 單元
-- `src/matmul_accel.v`：2x2 矩陣乘法加速器（時序版，`start/busy/done`）
-- `tb/matmul_accel_tb.v`：自檢式 testbench
-- `Makefile`：`make test` / `make clean`
+3. **較大型 5-stage CPU 系統**
+   - `rtl/cpu5_system.v`
+   - `rtl/control_unit.v`
+   - `rtl/alu32.v`
+   - `rtl/regfile32.v`
+   - `rtl/forward_unit.v`
+   - `rtl/hazard_unit.v`
+   - `tb/cpu5_system_tb.v`
 
-## 模組功能
+4. **APB 外設子系統（新增）**
+   - `rtl/apb_periph_subsys.v`
+   - `rtl/apb_uart.v`
+   - `rtl/apb_spi.v`
+   - `rtl/apb_i2c.v`
+   - `tb/apb_periph_subsys_tb.v`
 
-### `matmul_accel`
+---
 
-輸入：
-- `clk`, `rst_n`
-- `start`：拉高一拍啟動運算
-- `a_mat`：4 個 int8，row-major 打包（`[31:0]`）
-- `b_mat`：4 個 int8，row-major 打包（`[31:0]`）
+## APB 外設子系統說明
 
-輸出：
-- `busy`：運算中
-- `done`：完成脈衝（1 cycle）
-- `c_mat`：4 個 int32，row-major 打包（`[127:0]`）
+這一塊讓你可以把「外部 APB 匯流排訊號」接到三個常見週邊：
 
-計算內容：
+- UART
+- SPI
+- I2C
 
-\[
-C = A \times B
-\]
+### APB 介面
 
-其中 `A`,`B`,`C` 都是 2x2 矩陣。
+- `PCLK`, `PRESETn`
+- `PSEL`, `PENABLE`, `PWRITE`
+- `PADDR[31:0]`, `PWDATA[31:0]`
+- `PRDATA[31:0]`, `PREADY`, `PSLVERR`
 
-## 執行測試
+### 位址映射（`PADDR[15:12]`）
+
+- `0x0`: UART
+- `0x1`: SPI
+- `0x2`: I2C
+- 其他：回報 `PSLVERR=1`
+
+### 每個 peripheral 的用途（示範版）
+
+- UART: TX data / status / baud divisor 暫存器
+- SPI: TX/RX data / mode / clock divisor 暫存器
+- I2C: addr+data command / status / SCL divisor 暫存器
+
+> 目前是 **可驗證的示範模型**，不是完整時序精準的協定實作（例如 SPI shift engine、I2C start/stop 波形、UART oversampling）。
+
+---
+
+## 如何測試
+
+### APB 子系統（推薦）
+
+```bash
+make test-apb
+```
+
+預期 testbench 會印出：
+
+- `PASS: APB subsystem connects UART/SPI/I2C.`
+
+### 較大型 CPU 系統
+
+```bash
+make test-cpu-large
+```
+
+### 小型 CPU 教學版
+
+```bash
+make test-cpu
+```
+
+### 原本 accelerator 測試
 
 ```bash
 make test
 ```
 
-> 若本機沒有 `iverilog`，請先安裝 Icarus Verilog。
-
-## 下一步擴展方向
-
-1. 將 2x2 推廣成參數化 NxN
-2. 改成串流介面（valid/ready）
-3. 加上 on-chip SRAM buffer（A/B/C tile）
-4. 做成 systolic array + weight stationary / output stationary 資料流
-5. 增加量化支援（int8 / int4）與飽和邏輯
+> 如果環境沒有 `iverilog`，上述測試會無法執行。
